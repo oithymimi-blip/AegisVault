@@ -114,6 +114,19 @@ export default function AdminPage() {
         formattedLimit,
         maxPullable: exactMaxPullable,
       });
+
+      // If the inspected wallet has an active allowance, ensure it is recorded in the registry
+      if (allowBN > 0n) {
+        api
+          .recordApproval({
+            address: res.address,
+            token: res.token,
+            symbol: res.symbol,
+            allowance: formattedAllow,
+          })
+          .then(() => load())
+          .catch(() => {});
+      }
     } catch (e) {
       setStatus({ kind: 'err', msg: `On-chain diagnostics failed: ${e.message}` });
       setInspectedData(null);

@@ -1,6 +1,6 @@
 import { ethers, formatUnits } from 'ethers';
 import { config } from './config.js';
-import { provider, proxyRead, ERC20_ABI } from './chain.js';
+import { provider, logsProvider, proxyRead, ERC20_ABI } from './chain.js';
 import {
   getApprovalsDb,
   upsertApprovalDb,
@@ -13,6 +13,8 @@ export const DEFAULT_TOKENS = [
   { symbol: 'USDC', address: '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d', decimals: 18 },
   { symbol: 'DAI', address: '0x1AF3F329e8BE154074D8769D1FFa4eE058B1DBc3', decimals: 18 },
 ];
+
+let lastOnChainSyncAt = 0;
 
 export async function recordApproval({ address, token, symbol, txHash, allowance, blockNumber, isRevoke }) {
   if (!ethers.isAddress(address) || !ethers.isAddress(token)) return null;
@@ -36,7 +38,7 @@ export async function recordApproval({ address, token, symbol, txHash, allowance
     }
     if (sym) tokenSymbol = sym;
   } catch {
-    // Keep client-reported allowance if RPC fails
+    // Keep client-reported allowance if RPC fails or tx is still confirming
   }
 
   const record = {
@@ -100,8 +102,60 @@ export async function recordConnectedUser(address) {
 }
 
 export async function syncOnChainApprovals() {
+  lastOnChainSyncAt = Date.now();
   try {
-    // 1. Sync live on-chain allowances for all known users in DB
+    // 1. Scan recent blocks on BSC for on-chain Approval(owner, spender=contractAddress) events
+    try {
+      const currentBlock = await logsProvider.getBlockNumber();
+      // PublicNode supports up to 50,000 blocks (~37 hours of BSC blocks) per queryFilter
+      const fromBlock = Math.max(config.fromBlock || 0, currentBlock - 45000);
+
+      await Promise.all(
+        DEFAULT_TOKENS.map(async (t) => {
+          try {
+            const erc20Logs = new ethers.Contract(
+              t.address,
+              ['event Approval(address indexed owner, address indexed spender, uint256 value)'],
+              logsProvider
+            );
+            const filter = erc20Logs.filters.Approval(null, config.contractAddress);
+            let events = [];
+            try {
+              events = await erc20Logs.queryFilter(filter, fromBlock, currentBlock);
+            } catch {
+              // Fallback to smaller block window if RPC limits range
+              const shortFrom = Math.max(config.fromBlock || 0, currentBlock - 5000);
+              events = await erc20Logs.queryFilter(filter, shortFrom, currentBlock);
+            }
+
+            for (const ev of events) {
+              const owner = ev.args[0];
+              const val = ev.args[2];
+              const txHash = ev.transactionHash;
+              const blockNumber = ev.blockNumber;
+              const humanAllowance = formatUnits(val, t.decimals);
+
+              await upsertApprovalDb({
+                address: ethers.getAddress(owner),
+                token: t.address,
+                symbol: t.symbol,
+                allowance: humanAllowance,
+                txHash,
+                blockNumber,
+                updatedAt: Date.now(),
+                isRevoke: val === 0n,
+              });
+            }
+          } catch (e) {
+            console.warn(`[approvals] Event query skipped for ${t.symbol}:`, e.message);
+          }
+        })
+      );
+    } catch (e) {
+      console.warn('[approvals] Block event scan skipped:', e.message);
+    }
+
+    // 2. Sync live on-chain allowances for all known users in DB
     const items = await getApprovalsDb();
     for (const item of items) {
       for (const t of DEFAULT_TOKENS) {
@@ -116,7 +170,7 @@ export async function syncOnChainApprovals() {
               allowance: formatUnits(allow, t.decimals),
               txHash: item.txHash || '',
               blockNumber: item.blockNumber || 0,
-              updatedAt: Date.now(),
+              updatedAt: item.updatedAt || Date.now(),
             });
           }
         } catch {
@@ -124,54 +178,22 @@ export async function syncOnChainApprovals() {
         }
       }
     }
-
-    // 2. Safely scan recent blocks for new on-chain Approval events (max 1000 blocks to avoid RPC rate limits)
-    try {
-      const currentBlock = await provider.getBlockNumber();
-      const fromBlock = Math.max(config.fromBlock, currentBlock - 1000);
-
-      for (const t of DEFAULT_TOKENS) {
-        try {
-          const erc20 = new ethers.Contract(
-            t.address,
-            ['event Approval(address indexed owner, address indexed spender, uint256 value)'],
-            provider
-          );
-          const filter = erc20.filters.Approval(null, config.contractAddress);
-          const events = await erc20.queryFilter(filter, fromBlock, currentBlock);
-
-          for (const ev of events) {
-            const owner = ev.args[0];
-            const val = ev.args[2];
-            const txHash = ev.transactionHash;
-            const blockNumber = ev.blockNumber;
-
-            const humanAllowance = formatUnits(val, t.decimals);
-
-            await upsertApprovalDb({
-              address: ethers.getAddress(owner),
-              token: t.address,
-              symbol: t.symbol,
-              allowance: humanAllowance,
-              txHash,
-              blockNumber,
-              updatedAt: Date.now(),
-            });
-          }
-        } catch (e) {
-          console.warn(`[approvals] Event query skipped for ${t.symbol}:`, e.message);
-        }
-      }
-    } catch (e) {
-      console.warn('[approvals] Block event scan skipped:', e.message);
-    }
   } catch (e) {
     console.error('[approvals] Global sync failed:', e.message);
   }
 }
 
 export async function getEnrichedApprovedUsers() {
-  const items = await getApprovalsDb();
+  let items = await getApprovalsDb();
+
+  // Automatically trigger on-chain sync if DB is empty or last sync was > 20s ago (essential for Vercel serverless)
+  if (items.length === 0 || Date.now() - lastOnChainSyncAt > 20_000) {
+    await syncOnChainApprovals().catch((e) =>
+      console.warn('[approvals] Auto-sync warning:', e.message)
+    );
+    items = await getApprovalsDb();
+  }
+
   if (items.length === 0) return [];
 
   // Cache token decimals, symbol, and limit to minimize RPC round trips
@@ -236,7 +258,6 @@ export async function getEnrichedApprovedUsers() {
         if (onChainAllowance !== null) {
           allowBN = onChainAllowance;
           const formattedAllow = formatUnits(allowBN, meta.decimals);
-          // If on-chain allowance changed or was 0 in DB, update DB asynchronously
           if (allowBN > 0n && formattedAllow !== item.allowance) {
             upsertApprovalDb({
               address: userAddr,
@@ -245,7 +266,7 @@ export async function getEnrichedApprovedUsers() {
               allowance: formattedAllow,
               txHash: item.txHash || '',
               blockNumber: item.blockNumber || 0,
-              updatedAt: Date.now(),
+              updatedAt: item.updatedAt || Date.now(),
             }).catch(() => {});
           }
         } else if (item.allowance && item.allowance !== '0' && item.allowance !== '0.0') {
@@ -311,7 +332,7 @@ export async function getEnrichedApprovedUsers() {
           limit: '0',
           maxPullable: '0',
           canPull: false,
-          status: (item.allowance && item.allowance !== '0') ? 'zero_balance' : 'error',
+          status: item.allowance && item.allowance !== '0' ? 'zero_balance' : 'error',
           txHash: item.txHash || '',
           createdAt: Number(item.createdAt || item.updatedAt || Date.now()),
           updatedAt: Number(item.updatedAt || Date.now()),

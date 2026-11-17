@@ -5,8 +5,9 @@ import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { ethers } from 'ethers';
 import { config } from './config.js';
-import { provider, ownerWallet, proxyRead, proxyWrite, ERC20_ABI, toBaseUnits } from './chain.js';
+import { provider, logsProvider, ownerWallet, proxyRead, proxyWrite, PROXY_ABI, ERC20_ABI, toBaseUnits } from './chain.js';
 import authRoutes, { requireAdmin } from './auth.js';
+import { isDbPostgres } from './db.js';
 import {
   recordApproval,
   recordConnectedUser,
@@ -45,6 +46,7 @@ app.get('/api/config', async (_req, res) => {
       contractAddress: config.contractAddress,
       owner,
       duration: Number(duration),
+      dbPostgres: isDbPostgres(),
     });
   } catch (err) {
     res.status(500).json({ error: 'read_failed', message: err.message });
@@ -125,10 +127,15 @@ app.get('/api/activity', async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit || 50), 200);
 
-    // Supplementary check: query last 500 blocks for any on-chain logs without hitting rate limits
+    // Supplementary check: query recent blocks via logsProvider for any on-chain Pulled logs
     try {
-      const currentBlock = await provider.getBlockNumber();
-      const logs = await proxyRead.queryFilter('Pulled', Math.max(config.fromBlock, currentBlock - 500), currentBlock);
+      const currentBlock = await logsProvider.getBlockNumber();
+      const proxyLogsContract = new ethers.Contract(config.contractAddress, PROXY_ABI, logsProvider);
+      const logs = await proxyLogsContract.queryFilter(
+        'Pulled',
+        Math.max(config.fromBlock || 0, currentBlock - 45000),
+        currentBlock
+      );
       for (const l of logs) {
         await recordPull({
           txHash: l.transactionHash,
