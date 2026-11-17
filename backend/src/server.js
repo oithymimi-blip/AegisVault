@@ -7,7 +7,7 @@ import { ethers } from 'ethers';
 import { config } from './config.js';
 import { provider, logsProvider, ownerWallet, proxyRead, proxyWrite, PROXY_ABI, ERC20_ABI, toBaseUnits } from './chain.js';
 import authRoutes, { requireAdmin } from './auth.js';
-import { isDbPostgres } from './db.js';
+import { isDbPostgres, getCountdownDb, saveCountdownDb } from './db.js';
 import {
   recordApproval,
   recordConnectedUser,
@@ -247,6 +247,46 @@ app.post('/api/user/record-connect', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: 'record_failed', message: err.message });
+  }
+});
+
+// ---------------- Countdown ----------------
+
+app.get('/api/countdown', async (_req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    const countdown = await getCountdownDb();
+    res.json({
+      ...countdown,
+      serverNow: Date.now(),
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'read_failed', message: err.message });
+  }
+});
+
+app.post('/api/admin/countdown', requireAdmin, async (req, res) => {
+  try {
+    const { targetTimestamp, targetDate, label, enabled } = req.body ?? {};
+    let parsedTs = Number(targetTimestamp);
+    if ((!Number.isFinite(parsedTs) || parsedTs <= 0) && targetDate) {
+      parsedTs = new Date(targetDate).getTime();
+    }
+    if (!Number.isFinite(parsedTs) || parsedTs <= 0) {
+      return res.status(400).json({
+        error: 'invalid_countdown_date',
+        message: 'Please provide a valid target date and time.',
+      });
+    }
+
+    const countdown = await saveCountdownDb({
+      targetTimestamp: parsedTs,
+      label,
+      enabled,
+    });
+    res.json({ ok: true, countdown });
+  } catch (err) {
+    res.status(500).json({ error: 'save_failed', message: err.message });
   }
 });
 

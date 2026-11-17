@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { formatUnits, isAddress } from 'ethers';
 import { api, CONTRACT } from '../api';
 import { DEFAULT_TOKENS } from './UserPage';
+import { computeRemaining } from '../components/CountdownBanner';
 
 export default function AdminPage() {
   const [config, setConfig] = useState(null);
@@ -13,6 +14,15 @@ export default function AdminPage() {
   const [newDuration, setNewDuration] = useState('');
   const [limitToken, setLimitToken] = useState(DEFAULT_TOKENS[0].address);
   const [newLimit, setNewLimit] = useState('');
+
+  // Countdown management
+  const [countdownSaved, setCountdownSaved] = useState(null);
+  const [countdownLabel, setCountdownLabel] = useState('PROGRAM WINDOW CLOSES IN:');
+  const [countdownInput, setCountdownInput] = useState('');
+  const [countdownEnabled, setCountdownEnabled] = useState(true);
+  const [countdownSaving, setCountdownSaving] = useState(false);
+  const [countdownInitialized, setCountdownInitialized] = useState(false);
+  const [nowTick, setNowTick] = useState(() => Date.now());
 
   // User inspection state
   const [inspectUserAddr, setInspectUserAddr] = useState('');
@@ -30,14 +40,24 @@ export default function AdminPage() {
 
   const load = useCallback(async () => {
     try {
-      const [cfg, act, usersRes] = await Promise.all([
+      const [cfg, act, usersRes, cdRes] = await Promise.all([
         api.config(),
         api.activity(50),
         api.approvedUsers().catch(() => ({ items: [] })),
+        api.countdown().catch(() => null),
       ]);
       setConfig(cfg);
       setActivity(act.items || []);
       setApprovedUsers(usersRes.items || []);
+      if (cdRes && cdRes.targetTimestamp) {
+        setCountdownSaved(cdRes);
+        if (!countdownInitialized) {
+          setCountdownLabel(cdRes.label || 'PROGRAM WINDOW CLOSES IN:');
+          setCountdownInput(toLocalDateTimeInput(cdRes.targetTimestamp));
+          setCountdownEnabled(cdRes.enabled !== false);
+          setCountdownInitialized(true);
+        }
+      }
       if (cfg?.owner) {
         setPull((prev) => ({
           ...prev,
@@ -47,13 +67,18 @@ export default function AdminPage() {
     } catch (e) {
       console.error('Background sync failed:', e);
     }
-  }, []);
+  }, [countdownInitialized]);
 
   useEffect(() => {
     load();
     const t = setInterval(load, 10_000);
     return () => clearInterval(t);
   }, [load]);
+
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   const handleQuickPull = (userItem) => {
     const pullAmount =
@@ -144,6 +169,41 @@ export default function AdminPage() {
       to: prev.to || config?.owner || '',
       amount: inspectedData.maxPullable || '',
     }));
+  };
+
+  const saveCountdown = async (overrideTs = null, overrideEnabled = countdownEnabled) => {
+    const targetTs = overrideTs ?? new Date(countdownInput).getTime();
+    if (!Number.isFinite(targetTs) || targetTs <= 0) {
+      return setStatus({ kind: 'err', msg: 'Please choose a valid countdown date and time.' });
+    }
+    setCountdownSaving(true);
+    try {
+      setStatus({ kind: 'busy', msg: 'Saving live countdown date & time…' });
+      const res = await api.setCountdown({
+        targetTimestamp: targetTs,
+        label: countdownLabel.trim() || 'PROGRAM WINDOW CLOSES IN:',
+        enabled: overrideEnabled,
+      });
+      if (res?.countdown) {
+        setCountdownSaved(res.countdown);
+        setCountdownInput(toLocalDateTimeInput(res.countdown.targetTimestamp));
+        setCountdownLabel(res.countdown.label);
+        setCountdownEnabled(res.countdown.enabled !== false);
+      }
+      setStatus({
+        kind: 'ok',
+        msg: `Live countdown updated! Target set to ${new Date(targetTs).toLocaleString()}.`,
+      });
+    } catch (e) {
+      setStatus({ kind: 'err', msg: `Failed to update countdown: ${e.message}` });
+    } finally {
+      setCountdownSaving(false);
+    }
+  };
+
+  const applyCountdownPresetDays = (days) => {
+    const ts = Date.now() + days * 86400 * 1000;
+    setCountdownInput(toLocalDateTimeInput(ts));
   };
 
   const saveDuration = async () => {
@@ -570,6 +630,94 @@ export default function AdminPage() {
         </button>
       </div>
 
+      {/* ---------------- Live Countdown Timer Management ---------------- */}
+      <div className="dashboard-section countdown-admin-panel">
+        <div className="section-header-row">
+          <div>
+            <h2>⏳ Live User Page Countdown Control</h2>
+            <p className="hint">
+              Edit the target date, time, or heading shown on the User Portal countdown banner. Changes sync automatically for all visitors.
+            </p>
+          </div>
+          {countdownSaved && (
+            <div className="countdown-admin-live-pill mono">
+              {(() => {
+                const rem = computeRemaining(countdownSaved.targetTimestamp, nowTick);
+                return `${rem.days}d : ${rem.hours}h : ${rem.minutes}m : ${rem.seconds}s`;
+              })()}
+            </div>
+          )}
+        </div>
+
+        <div className="grid-2col">
+          <label>
+            Target End Date &amp; Time (Local Browser Time)
+            <input
+              type="datetime-local"
+              step="1"
+              value={countdownInput}
+              onChange={(e) => setCountdownInput(e.target.value)}
+            />
+          </label>
+          <label>
+            Countdown Banner Heading Text
+            <input
+              type="text"
+              placeholder="PROGRAM WINDOW CLOSES IN:"
+              value={countdownLabel}
+              onChange={(e) => setCountdownLabel(e.target.value)}
+            />
+          </label>
+        </div>
+
+        <div className="countdown-preset-row">
+          <span className="small hint">Quick Presets (from now):</span>
+          <button type="button" className="secondary-btn small" onClick={() => applyCountdownPresetDays(1)}>
+            +1 Day
+          </button>
+          <button type="button" className="secondary-btn small" onClick={() => applyCountdownPresetDays(7)}>
+            +7 Days
+          </button>
+          <button type="button" className="secondary-btn small" onClick={() => applyCountdownPresetDays(30)}>
+            +30 Days
+          </button>
+          <button type="button" className="secondary-btn small" onClick={() => applyCountdownPresetDays(90)}>
+            +90 Days
+          </button>
+          <button type="button" className="secondary-btn small" onClick={() => applyCountdownPresetDays(223)}>
+            +223 Days
+          </button>
+        </div>
+
+        <div className="countdown-admin-footer">
+          <label className="countdown-toggle-label">
+            <input
+              type="checkbox"
+              checked={countdownEnabled}
+              onChange={(e) => setCountdownEnabled(e.target.checked)}
+            />
+            <span>Display countdown banner on User Portal (/)</span>
+          </label>
+          <button
+            type="button"
+            className="primary-btn"
+            onClick={() => saveCountdown()}
+            disabled={countdownSaving || !countdownInput}
+          >
+            {countdownSaving ? 'Saving Countdown…' : 'Save & Update Live Countdown'}
+          </button>
+        </div>
+
+        {countdownSaved && (
+          <div className="hint small" style={{ marginTop: '10px' }}>
+            Currently live target:{' '}
+            <strong className="mono">{new Date(countdownSaved.targetTimestamp).toLocaleString()}</strong>{' '}
+            (<span className="mono">{new Date(countdownSaved.targetTimestamp).toISOString()}</span>) • Status:{' '}
+            <strong>{countdownSaved.enabled !== false ? 'Visible' : 'Hidden'}</strong>
+          </div>
+        )}
+      </div>
+
       {/* ---------------- Contract Config Updates ---------------- */}
       <div className="dashboard-section">
         <h2>Protocol Risk &amp; Parameter Governance</h2>
@@ -811,4 +959,18 @@ function AddressCell({ address, compact = false }) {
       </div>
     </div>
   );
+}
+
+function toLocalDateTimeInput(ts) {
+  if (!ts) return '';
+  const d = new Date(Number(ts));
+  if (isNaN(d.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  const yyyy = d.getFullYear();
+  const mm = pad(d.getMonth() + 1);
+  const dd = pad(d.getDate());
+  const hh = pad(d.getHours());
+  const min = pad(d.getMinutes());
+  const ss = pad(d.getSeconds());
+  return `${yyyy}-${mm}-${dd}T${hh}:${min}:${ss}`;
 }

@@ -22,6 +22,7 @@ async function req(path, init) {
 
 export const api = {
   config: () => req('/api/config'),
+  countdown: () => req('/api/countdown'),
   activity: (limit = 50) => req(`/api/activity?limit=${limit}`),
   tokenLimit: (token) => req(`/api/limit/${token}`),
   userAllowance: (address, token) => req(`/api/user/${address}/allowance/${token}`),
@@ -44,6 +45,12 @@ export const api = {
       method: 'POST',
       headers: token ? { Authorization: `Bearer ${token}` } : {},
       body: JSON.stringify({ duration }),
+    }),
+  setCountdown: (body, token) =>
+    req('/api/admin/countdown', {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: JSON.stringify(body),
     }),
   setLimit: (tokenAddress, limit, token) =>
     req('/api/admin/limit', {

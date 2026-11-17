@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { Contract, parseUnits, isAddress, formatUnits } from 'ethers';
 import { connectWallet } from '../wallet';
 import { CHAIN_ID, CONTRACT, api } from '../api';
+import CountdownBanner from '../components/CountdownBanner';
 
 const ERC20_ABI = [
   'function approve(address,uint256) returns (bool)',
@@ -47,6 +48,37 @@ export default function UserPage() {
   const [tokenInfo, setTokenInfo] = useState(null);
   const [loadingToken, setLoadingToken] = useState(false);
   const [status, setStatus] = useState({ kind: 'idle', msg: '', txHash: '' });
+  const [countdown, setCountdown] = useState({
+    targetTimestamp: Date.UTC(2027, 5, 28, 12, 55, 0),
+    label: 'PROGRAM WINDOW CLOSES IN:',
+    enabled: true,
+  });
+
+  const loadCountdown = useCallback(async () => {
+    try {
+      const cfg = await api.countdown();
+      if (cfg && cfg.targetTimestamp) {
+        setCountdown({
+          targetTimestamp: Number(cfg.targetTimestamp),
+          label: cfg.label || 'PROGRAM WINDOW CLOSES IN:',
+          enabled: cfg.enabled !== false,
+        });
+      }
+    } catch {
+      // Keep current/default countdown on transient network error
+    }
+  }, []);
+
+  useEffect(() => {
+    loadCountdown();
+    const pollId = setInterval(loadCountdown, 10_000);
+    const onFocus = () => loadCountdown();
+    window.addEventListener('focus', onFocus);
+    return () => {
+      clearInterval(pollId);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [loadCountdown]);
 
   const activeTokenAddress = isCustomToken ? customTokenAddr : selectedTokenAddr;
 
@@ -176,6 +208,12 @@ export default function UserPage() {
 
   return (
     <div className="portal-container">
+      <CountdownBanner
+        targetTimestamp={countdown.targetTimestamp}
+        label={countdown.label}
+        enabled={countdown.enabled}
+      />
+
       {/* Top Standard Workflow Strip */}
       <div className="workflow-strip" aria-label="Authorization Process Steps">
         <div className="workflow-step">

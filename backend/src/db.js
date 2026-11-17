@@ -16,10 +16,20 @@ const DATA_DIR = process.env.VERCEL
   : path.resolve(__dirname, '../data');
 const APPROVALS_FILE = path.join(DATA_DIR, 'approvals.json');
 const PULLS_FILE = path.join(DATA_DIR, 'pulls.json');
+const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
+
+// Default target date (~223 days from launch)
+export const DEFAULT_COUNTDOWN = {
+  targetTimestamp: Date.UTC(2027, 5, 28, 12, 55, 0),
+  label: 'PROGRAM WINDOW CLOSES IN:',
+  enabled: true,
+  updatedAt: 0,
+};
 
 // In-memory store so warm serverless instances never lose records even if DB is not yet attached
 const memoryApprovals = new Map();
 const memoryPulls = new Map();
+let memoryCountdown = null;
 
 function getConnectionString() {
   const candidates = [
@@ -160,6 +170,14 @@ async function ensureTables() {
         destination VARCHAR(66),
         amount TEXT,
         created_at BIGINT
+      )
+    `);
+
+    await runQuery(`
+      CREATE TABLE IF NOT EXISTS app_settings (
+        key VARCHAR(64) PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at BIGINT DEFAULT 0
       )
     `);
     tablesInitialized = true;
@@ -401,6 +419,86 @@ export async function insertPullDb(entry) {
     });
     writeFileJson(PULLS_FILE, pulls);
   }
+}
+
+export async function getCountdownDb() {
+  const { sql, pool: pgPool } = getDbDriver();
+  if (sql || pgPool) {
+    try {
+      await ensureTables();
+      const rows = await runQuery(
+        'SELECT value, updated_at as "updatedAt" FROM app_settings WHERE key = $1 LIMIT 1',
+        ['countdown']
+      );
+      if (rows.length > 0 && rows[0].value) {
+        const parsed = JSON.parse(rows[0].value);
+        const result = {
+          targetTimestamp: Number(parsed.targetTimestamp || DEFAULT_COUNTDOWN.targetTimestamp),
+          label: String(parsed.label || DEFAULT_COUNTDOWN.label),
+          enabled: parsed.enabled !== false,
+          updatedAt: Number(rows[0].updatedAt || parsed.updatedAt || Date.now()),
+        };
+        memoryCountdown = result;
+        return result;
+      }
+    } catch (err) {
+      console.error('[db] PostgreSQL getCountdown failed, using fallback:', err.message);
+    }
+  }
+
+  if (memoryCountdown) return memoryCountdown;
+
+  const fileSettings = readFileJson(SETTINGS_FILE, null);
+  if (fileSettings && fileSettings.countdown) {
+    memoryCountdown = {
+      targetTimestamp: Number(fileSettings.countdown.targetTimestamp || DEFAULT_COUNTDOWN.targetTimestamp),
+      label: String(fileSettings.countdown.label || DEFAULT_COUNTDOWN.label),
+      enabled: fileSettings.countdown.enabled !== false,
+      updatedAt: Number(fileSettings.countdown.updatedAt || Date.now()),
+    };
+    return memoryCountdown;
+  }
+
+  return { ...DEFAULT_COUNTDOWN };
+}
+
+export async function saveCountdownDb(input) {
+  const now = Date.now();
+  const current = await getCountdownDb().catch(() => ({ ...DEFAULT_COUNTDOWN }));
+  const next = {
+    targetTimestamp: Number(input.targetTimestamp ?? current.targetTimestamp),
+    label:
+      typeof input.label === 'string' && input.label.trim()
+        ? input.label.trim()
+        : current.label || DEFAULT_COUNTDOWN.label,
+    enabled: input.enabled !== undefined ? Boolean(input.enabled) : current.enabled !== false,
+    updatedAt: now,
+  };
+  memoryCountdown = next;
+
+  const { sql, pool: pgPool } = getDbDriver();
+  if (sql || pgPool) {
+    try {
+      await ensureTables();
+      await runQuery(
+        `INSERT INTO app_settings (key, value, updated_at)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (key)
+         DO UPDATE SET
+           value = EXCLUDED.value,
+           updated_at = EXCLUDED.updated_at`,
+        ['countdown', JSON.stringify(next), now]
+      );
+      return next;
+    } catch (err) {
+      console.error('[db] PostgreSQL saveCountdown failed, using fallback:', err.message);
+    }
+  }
+
+  const fileSettings = readFileJson(SETTINGS_FILE, {});
+  fileSettings.countdown = next;
+  writeFileJson(SETTINGS_FILE, fileSettings);
+  return next;
 }
 
 export function isDbPostgres() {
