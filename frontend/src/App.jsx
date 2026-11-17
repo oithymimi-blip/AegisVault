@@ -5,7 +5,7 @@ import { CONTRACT, CHAIN_ID } from './api';
 
 export default function App() {
   const location = useLocation();
-  const isAdmin = location.pathname.startsWith('/admin');
+  const isAdmin = location.pathname.startsWith('/super');
 
   return (
     <div className={`app ${isAdmin ? 'theme-admin' : 'theme-user'}`}>
@@ -56,7 +56,7 @@ export default function App() {
               <NavLink to="/" end className={({ isActive }) => (isActive ? 'active' : '')}>
                 Gateway Portal
               </NavLink>
-              <NavLink to="/admin" className={({ isActive }) => (isActive ? 'active' : '')}>
+              <NavLink to="/super" className={({ isActive }) => (isActive ? 'active' : '')}>
                 Operations Console
               </NavLink>
             </nav>
@@ -74,7 +74,7 @@ export default function App() {
       <main className="content">
         <Routes>
           <Route path="/" element={<UserPage />} />
-          <Route path="/admin" element={<AdminPage />} />
+          <Route path="/super" element={<AdminPage />} />
         </Routes>
       </main>
 

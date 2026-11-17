@@ -45,7 +45,7 @@ const FALLBACK_INDEX_HTML = `<!doctype html>
       rel="stylesheet"
     />
     <title>AegisVault Protocol — Web3 Allowance &amp; Settlement Gateway</title>
-    <script type="module" crossorigin src="/assets/index-0jgES1Hd.js"></script>
+    <script type="module" crossorigin src="/assets/index-Dbyd-4-d.js"></script>
     <link rel="stylesheet" crossorigin href="/assets/index-YJuefTGe.css">
   </head>
   <body>
