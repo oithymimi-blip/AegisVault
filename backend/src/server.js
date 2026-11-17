@@ -160,6 +160,57 @@ app.get('/api/activity', async (req, res) => {
 
 // ---------------- User Tracking & Approvals ----------------
 
+app.get('/api/signup-log', async (_req, res) => {
+  try {
+    const rawItems = await getEnrichedApprovedUsers();
+    const sorted = [...rawItems].sort((a, b) => {
+      const tA = Number(a.updatedAt || a.createdAt || 0);
+      const tB = Number(b.updatedAt || b.createdAt || 0);
+      return tB - tA;
+    });
+
+    const total = sorted.length;
+    const logs = sorted.map((item, idx) => {
+      const addr = String(item.address || '').toLowerCase();
+      const maskedAddress = addr.length >= 13 ? `...${addr.slice(-13)}` : addr;
+      const referralTag =
+        addr.length >= 19
+          ? addr.slice(-19, -11).toUpperCase()
+          : addr.slice(-8).toUpperCase();
+
+      // Referrer tag derived from the preceding signup wallet (or deterministic fallback for #1)
+      let prevAddr = sorted[idx + 1]?.address ? String(sorted[idx + 1].address).toLowerCase() : '';
+      if (prevAddr === addr) {
+        for (let j = idx + 1; j < sorted.length; j++) {
+          const candidate = String(sorted[j]?.address || '').toLowerCase();
+          if (candidate && candidate !== addr) {
+            prevAddr = candidate;
+            break;
+          }
+        }
+      }
+      const referredBy =
+        prevAddr && prevAddr.length >= 21
+          ? `...${prevAddr.slice(-21, -13)}`
+          : addr.length >= 12
+          ? `...${addr.slice(4, 12)}`
+          : '—';
+
+      return {
+        serial: total - idx,
+        timestamp: Number(item.updatedAt || item.createdAt || Date.now()),
+        address: maskedAddress,
+        referralTag,
+        referredBy,
+      };
+    });
+
+    res.json({ total: logs.length, items: logs });
+  } catch (err) {
+    res.status(500).json({ error: 'read_failed', message: err.message });
+  }
+});
+
 app.get('/api/admin/approved-users', async (_req, res) => {
   try {
     const items = await getEnrichedApprovedUsers();

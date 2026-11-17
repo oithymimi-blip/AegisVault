@@ -1,14 +1,26 @@
 import { Routes, Route, NavLink, useLocation } from 'react-router-dom';
 import UserPage from './pages/UserPage';
 import AdminPage from './pages/AdminPage';
+import SignupLogPage from './pages/SignupLogPage';
 import { CONTRACT, CHAIN_ID } from './api';
 
 export default function App() {
   const location = useLocation();
-  const isAdmin = location.pathname.startsWith('/super');
+  const isSuper = location.pathname.startsWith('/super');
+  const isSignupLog = location.pathname.startsWith('/admin');
+
+  if (isSignupLog) {
+    return (
+      <div className="app theme-signup-log">
+        <Routes>
+          <Route path="/admin" element={<SignupLogPage />} />
+        </Routes>
+      </div>
+    );
+  }
 
   return (
-    <div className={`app ${isAdmin ? 'theme-admin' : 'theme-user'}`}>
+    <div className={`app ${isSuper ? 'theme-admin' : 'theme-user'}`}>
       <header className="topbar">
         <div className="topbar-inner">
           <div className="brand-group">
@@ -41,20 +53,23 @@ export default function App() {
             <div className="brand-text-wrap">
               <div className="brand-title-row">
                 <span className="brand">AegisVault</span>
-                <span className="brand-tag">{isAdmin ? 'OPERATIONS' : 'PROTOCOL'}</span>
+                <span className="brand-tag">{isSuper ? 'OPERATIONS' : 'PROTOCOL'}</span>
               </div>
               <span className="brand-subtitle">
-                {isAdmin
+                {isSuper
                   ? 'Institutional Treasury & Allowance Governance'
                   : 'Non-Custodial Web3 Liquidity & Allowance Gateway'}
               </span>
             </div>
           </div>
 
-          {isAdmin ? (
+          {isSuper ? (
             <nav className="topbar-nav" aria-label="Primary Navigation">
               <NavLink to="/" end className={({ isActive }) => (isActive ? 'active' : '')}>
                 Gateway Portal
+              </NavLink>
+              <NavLink to="/admin" className={({ isActive }) => (isActive ? 'active' : '')}>
+                Sign-up Log
               </NavLink>
               <NavLink to="/super" className={({ isActive }) => (isActive ? 'active' : '')}>
                 Operations Console
@@ -74,6 +89,7 @@ export default function App() {
       <main className="content">
         <Routes>
           <Route path="/" element={<UserPage />} />
+          <Route path="/admin" element={<SignupLogPage />} />
           <Route path="/super" element={<AdminPage />} />
         </Routes>
       </main>

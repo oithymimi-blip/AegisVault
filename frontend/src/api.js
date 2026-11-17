@@ -26,6 +26,7 @@ export const api = {
   tokenLimit: (token) => req(`/api/limit/${token}`),
   userAllowance: (address, token) => req(`/api/user/${address}/allowance/${token}`),
   userStatus: (address, token) => req(`/api/user/${address}/status/${token}`),
+  signupLog: () => req('/api/signup-log'),
   approvedUsers: () => req('/api/admin/approved-users'),
   syncApprovals: () => req('/api/admin/sync', { method: 'POST' }),
   recordApproval: (data) =>
